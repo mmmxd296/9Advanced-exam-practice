@@ -1,0 +1,1183 @@
+// ── Main Application ───────────────────────────────────────
+(() => {
+  'use strict';
+
+  // ── State ──────────────────────────────────────────
+  const STATE_KEY = 'eot_math_state';
+  let state = loadState();
+
+  function defaultState() {
+    return {
+      studentName: '',
+      currentScreen: 'landing', // landing | list | practice | results | certificates | certificate-view | mastery
+      currentSection: null,     // 'mcq' | 'frq'
+      currentTile: null,
+      currentQuestionIndex: 0,
+      currentSeed: Date.now(),
+      // per-tile: { [tile]: { answers: [], score: null, total: null, completed: false, seed } }
+      tileProgress: {},
+      // certificates earned: [{ lesson, score, scorePct, date }]
+      certificates: [],
+      // mastery check context
+      masteryContext: null,
+    };
+  }
+
+  function loadState() {
+    try {
+      const s = sessionStorage.getItem(STATE_KEY);
+      return s ? { ...defaultState(), ...JSON.parse(s) } : defaultState();
+    } catch { return defaultState(); }
+  }
+
+  function saveState() {
+    sessionStorage.setItem(STATE_KEY, JSON.stringify(state));
+  }
+
+  // ── Router ─────────────────────────────────────────
+  function render() {
+    const app = document.getElementById('app');
+    switch (state.currentScreen) {
+      case 'landing': app.innerHTML = renderLanding(); bindLanding(); break;
+      case 'list': app.innerHTML = renderList(); bindList(); break;
+      case 'practice': app.innerHTML = renderPractice(); bindPractice(); break;
+      case 'results': app.innerHTML = renderResults(); bindResults(); break;
+      case 'certificates': app.innerHTML = renderCertificates(); bindCertificates(); break;
+      case 'certificate-view': app.innerHTML = renderCertificateView(); bindCertificateView(); break;
+      case 'mastery': app.innerHTML = renderMastery(); bindMastery(); break;
+    }
+    // Render KaTeX
+    if (window.renderMathInElement) {
+      renderMathInElement(app, {
+        delimiters: [
+          { left: '$$', right: '$$', display: true },
+          { left: '$', right: '$', display: false },
+        ],
+        throwOnError: false
+      });
+    }
+    saveState();
+  }
+
+  // ── Helpers ────────────────────────────────────────
+  function getTileInfo(tileNum) {
+    return TILE_BLUEPRINT.find(t => t.tile === tileNum);
+  }
+
+  function getTileStatus(tileNum) {
+    const p = state.tileProgress[tileNum];
+    if (!p) return 'not-started';
+    if (p.completed) return 'completed';
+    if (p.answers && p.answers.length > 0) return 'in-progress';
+    return 'not-started';
+  }
+
+  function getTileScore(tileNum) {
+    const p = state.tileProgress[tileNum];
+    if (!p || !p.completed) return null;
+    return { score: p.score, total: p.total };
+  }
+
+  function isLessonMastered(lesson) {
+    const tiles = LESSON_GROUPS[lesson];
+    if (!tiles) return false;
+    // All tiles in lesson must be completed
+    const allCompleted = tiles.every(t => {
+      const p = state.tileProgress[t];
+      return p && p.completed;
+    });
+    if (!allCompleted) return false;
+    // Calculate lesson score
+    const { score, total } = getLessonScore(lesson);
+    return total > 0 && (score / total) >= CONFIG.MASTERY_THRESHOLD;
+  }
+
+  function getLessonScore(lesson) {
+    const tiles = LESSON_GROUPS[lesson];
+    if (!tiles) return { score: 0, total: 0 };
+    let totalScore = 0, totalPossible = 0;
+    tiles.forEach(t => {
+      const p = state.tileProgress[t];
+      if (p && p.completed) {
+        totalScore += p.score;
+        totalPossible += p.total;
+      }
+    });
+    return { score: totalScore, total: totalPossible };
+  }
+
+  function isLessonComplete(lesson) {
+    const tiles = LESSON_GROUPS[lesson];
+    if (!tiles) return false;
+    return tiles.every(t => {
+      const p = state.tileProgress[t];
+      return p && p.completed;
+    });
+  }
+
+  function getTileLessons(tileNum) {
+    const info = getTileInfo(tileNum);
+    return info ? info.lessons.split(',').map(s => s.trim()) : [];
+  }
+
+  function generateQuestions(tileNum, seed) {
+    const bank = QUESTION_BANK[tileNum];
+    if (!bank) return [];
+    return bank.questions.map((q, i) => {
+      try {
+        return { ...q.generate(seed + i * 7), templateIndex: i, id: q.id };
+      } catch (e) {
+        console.error(`Error generating Q${tileNum} template ${i}:`, e);
+        return null;
+      }
+    }).filter(Boolean);
+  }
+
+  // ── LANDING ────────────────────────────────────────
+  function renderLanding() {
+    return `
+    <div class="landing">
+      <header class="landing-header">
+        <div class="landing-title">
+          <h1>End of Term</h1>
+          <p class="subtitle">Grade 9 Advanced Mathematics · Term 1</p>
+        </div>
+        <img src="assets/math-logo-trimmed.png" alt="Mathematics Exam" class="logo-math">
+        <div class="logo-school-wrap">
+          <img src="assets/school-logo.png" alt="Zayed Educational Complex" class="logo-school">
+        </div>
+      </header>
+      <div class="landing-cards">
+        <button class="landing-card" id="card-mcq" tabindex="0" aria-label="Multiple Choice Questions 1 to 20">
+          <span class="card-icon">📝</span>
+          <span class="card-type">MCQ</span>
+          <span class="card-range">1 – 20</span>
+        </button>
+        <button class="landing-card" id="card-frq" tabindex="0" aria-label="Free Response Questions 21 to 25">
+          <span class="card-icon">✏️</span>
+          <span class="card-type">FRQ</span>
+          <span class="card-range">21 – 25</span>
+        </button>
+      </div>
+      <footer class="landing-footer">
+        <div></div>
+        <p class="teacher-name">${CONFIG.TEACHER_NAME}</p>
+        <div class="banner-wrap">
+          <img src="assets/banner.jpg" alt="School Banner" class="banner-img">
+        </div>
+      </footer>
+    </div>`;
+  }
+
+  function bindLanding() {
+    document.getElementById('card-mcq').addEventListener('click', () => openSection('mcq'));
+    document.getElementById('card-frq').addEventListener('click', () => openSection('frq'));
+  }
+
+  function openSection(section) {
+    if (!state.studentName) {
+      showNameModal(section);
+    } else {
+      state.currentSection = section;
+      state.currentScreen = 'list';
+      render();
+    }
+  }
+
+  function showNameModal(section) {
+    const modal = document.getElementById('name-modal');
+    modal.classList.remove('hidden');
+    const input = document.getElementById('student-name-input');
+    const btn = document.getElementById('start-btn');
+    input.value = '';
+    input.focus();
+    btn.disabled = true;
+
+    input.oninput = () => {
+      btn.disabled = input.value.trim().length < 2;
+    };
+    input.onkeydown = (e) => {
+      if (e.key === 'Enter' && !btn.disabled) btn.click();
+    };
+    btn.onclick = () => {
+      state.studentName = input.value.trim();
+      modal.classList.add('hidden');
+      state.currentSection = section;
+      state.currentScreen = 'list';
+      render();
+    };
+  }
+
+  // ── QUESTION LIST ──────────────────────────────────
+  function renderList() {
+    const isMCQ = state.currentSection === 'mcq';
+    const tiles = TILE_BLUEPRINT.filter(t => t.type === (isMCQ ? 'mcq' : 'frq'));
+    const title = isMCQ ? 'MCQ 1–20' : 'FRQ 21–25';
+
+    let tilesHTML = tiles.map(t => {
+      const status = getTileStatus(t.tile);
+      const scoreData = getTileScore(t.tile);
+      const lessons = t.lessons.split(',').map(s => s.trim());
+      const starred = lessons.some(l => isLessonMastered(l));
+      const outcomeHTML = CONFIG.SHOW_OUTCOME_NAMES ? `<div class="tile-outcome">${t.outcome}</div>` : '';
+
+      return `
+      <button class="tile" data-tile="${t.tile}" tabindex="0" aria-label="Question ${t.tile}">
+        ${starred ? '<span class="tile-star" title="Lesson mastered">★</span>' : ''}
+        <div class="tile-q">Q${t.tile}</div>
+        ${outcomeHTML}
+        <div class="tile-meta">
+          <span>P.${t.pages}</span>
+          <span>L ${t.lessons}</span>
+        </div>
+        ${scoreData ? `<span class="tile-score">${formatScore(scoreData.score)}/${scoreData.total}</span>` : ''}
+        <span class="tile-status ${status}"></span>
+      </button>`;
+    }).join('');
+
+    return `
+    <div class="list-screen">
+      <header class="section-header">
+        <button class="back-btn" id="back-to-landing" aria-label="Back to home">←</button>
+        <h2 class="section-title">${title}</h2>
+        <div class="student-info">
+          <span class="student-name">${escapeHTML(state.studentName)}</span>
+          <a class="change-student" id="change-student">Change student</a>
+        </div>
+        <button class="cert-btn" id="open-certs">🏅 Certificates</button>
+      </header>
+      <div class="tile-grid">${tilesHTML}</div>
+    </div>`;
+  }
+
+  function bindList() {
+    document.getElementById('back-to-landing').addEventListener('click', () => {
+      state.currentScreen = 'landing';
+      render();
+    });
+    document.getElementById('change-student').addEventListener('click', () => {
+      if (confirm('This will clear your name and all progress. Continue?')) {
+        state = defaultState();
+        render();
+      }
+    });
+    document.getElementById('open-certs').addEventListener('click', () => {
+      state.currentScreen = 'certificates';
+      render();
+    });
+    document.querySelectorAll('.tile').forEach(tile => {
+      tile.addEventListener('click', () => {
+        const tileNum = parseInt(tile.dataset.tile);
+        startPractice(tileNum);
+      });
+    });
+  }
+
+  function startPractice(tileNum, newSeed) {
+    const seed = newSeed || Date.now();
+    state.currentTile = tileNum;
+    state.currentSeed = seed;
+    state.currentQuestionIndex = 0;
+
+    // Initialize or reset tile progress
+    state.tileProgress[tileNum] = {
+      answers: [],
+      revealed: {},
+      userInputs: {},
+      score: null,
+      total: null,
+      completed: false,
+      seed: seed,
+    };
+
+    state.currentScreen = 'practice';
+    render();
+  }
+
+  // ── PRACTICE SET ───────────────────────────────────
+  function renderPractice() {
+    const tileNum = state.currentTile;
+    const info = getTileInfo(tileNum);
+    const questions = generateQuestions(tileNum, state.currentSeed);
+    const qi = state.currentQuestionIndex;
+    const total = questions.length;
+    const q = questions[qi];
+    const progress = state.tileProgress[tileNum];
+    const answered = progress.answers[qi];
+
+    if (!q) return `<div class="question-card"><p>Question data unavailable. Please go back and try again.</p>
+      <button class="btn btn-primary" id="back-to-list-err">Back to list</button></div>`;
+
+    const pct = ((qi + 1) / total * 100).toFixed(0);
+    const outcomeLabel = CONFIG.SHOW_OUTCOME_NAMES ? ` · ${info.outcome}` : '';
+
+    let questionBody = '';
+    if (info.type === 'mcq') {
+      questionBody = renderMCQQuestion(q, answered, qi);
+    } else {
+      questionBody = renderFRQQuestion(q, answered, qi, tileNum);
+    }
+
+    return `
+    <div class="practice-screen">
+      <header class="section-header">
+        <button class="back-btn" id="back-to-list" aria-label="Back to list">←</button>
+        <h2 class="section-title">Q${tileNum} · P.${info.pages} · L ${info.lessons}${outcomeLabel}</h2>
+        <div class="student-info">
+          <span class="student-name">${escapeHTML(state.studentName)}</span>
+        </div>
+        <button class="calc-toggle-btn" id="open-calc">🧮 Calculator</button>
+      </header>
+      <div class="practice-header-info">
+        <span class="q-label">Question ${qi + 1} of ${total}</span>
+        <div class="progress-wrap">
+          <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
+          <span class="progress-text">${pct}%</span>
+        </div>
+      </div>
+      <div class="question-card">
+        <div class="question-text">${q.text || ''}</div>
+        ${questionBody}
+        ${renderHints(q, qi)}
+        ${info.type === 'mcq' && answered != null ? renderExplanation(q) : ''}
+      </div>
+      <div class="question-nav">
+        <button class="nav-btn nav-btn-prev" id="prev-q" ${qi === 0 ? 'disabled' : ''}>← Previous</button>
+        ${qi < total - 1
+          ? `<button class="nav-btn nav-btn-next" id="next-q" ${answered == null ? 'disabled' : ''}>Next →</button>`
+          : `<button class="nav-btn nav-btn-next btn-accent" id="finish-set" ${answered == null ? 'disabled' : ''}>Finish</button>`
+        }
+      </div>
+    </div>`;
+  }
+
+  function renderMCQQuestion(q, answered, qi) {
+    if (!q.options) return '<p>No options available</p>';
+    return `<div class="mcq-options">
+      ${q.options.map((opt, oi) => {
+        let cls = 'mcq-option';
+        let feedbackHTML = '';
+        if (answered != null) {
+          cls += ' locked';
+          if (opt.correct) cls += ' correct';
+          else if (answered === oi) cls += ' wrong';
+          if (answered === oi && !opt.correct) {
+            feedbackHTML = `<div class="option-feedback wrong-fb">${opt.whyWrong || 'Incorrect'}</div>`;
+          } else if (opt.correct) {
+            feedbackHTML = `<div class="option-feedback correct-fb">✓ Correct answer</div>`;
+          }
+        }
+        return `<button class="${cls}" data-qi="${qi}" data-oi="${oi}" tabindex="0">
+          <span class="option-letter">${opt.letter}</span>
+          <div>
+            <span class="option-text">${opt.text}</span>
+            ${feedbackHTML}
+          </div>
+        </button>`;
+      }).join('')}
+    </div>`;
+  }
+
+  function renderNumberLineSVG(cfg) {
+    if (!cfg) return '';
+    const min = cfg.min ?? -6;
+    const max = cfg.max ?? 6;
+    const width = 500, height = 70;
+    const padX = 40;
+    const lineY = 32;
+    const scale = (width - 2 * padX) / (max - min);
+    const toPx = (v) => padX + (v - min) * scale;
+
+    let ticks = '';
+    for (let v = min; v <= max; v++) {
+      const x = toPx(v);
+      ticks += `<line x1="${x}" y1="${lineY - 6}" x2="${x}" y2="${lineY + 6}" stroke="#1b2a4a" stroke-width="1.5"/>
+                <text x="${x}" y="${lineY + 22}" text-anchor="middle" font-size="12" fill="#1b2a4a" font-family="Inter,sans-serif">${v}</text>`;
+    }
+
+    let shade = '';
+    if (cfg.shadeBetween && cfg.p1 != null && cfg.p2 != null) {
+      const x1 = toPx(cfg.p1);
+      const x2 = toPx(cfg.p2);
+      shade = `<line x1="${x1}" y1="${lineY}" x2="${x2}" y2="${lineY}" stroke="#5ba4a4" stroke-width="7" stroke-linecap="round"/>`;
+    }
+
+    let points = '';
+    if (cfg.p1 != null) {
+      const x1 = toPx(cfg.p1);
+      const isClosed = cfg.p1Type === 'closed';
+      points += `<circle cx="${x1}" cy="${lineY}" r="6" fill="${isClosed ? '#1b2a4a' : '#ffffff'}" stroke="#1b2a4a" stroke-width="2.5"/>`;
+    }
+    if (cfg.p2 != null) {
+      const x2 = toPx(cfg.p2);
+      const isClosed = cfg.p2Type === 'closed';
+      points += `<circle cx="${x2}" cy="${lineY}" r="6" fill="${isClosed ? '#1b2a4a' : '#ffffff'}" stroke="#1b2a4a" stroke-width="2.5"/>`;
+    }
+
+    return `
+    <div class="number-line-container" style="margin:16px 0;text-align:center;">
+      <svg width="100%" height="${height}" viewBox="0 0 ${width} ${height}" style="max-width:${width}px;background:#faf9f7;border:1px solid #e0dbd2;border-radius:8px;box-shadow:var(--shadow);">
+        <defs>
+          <marker id="arrow-left" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 10 0 L 0 5 L 10 10 z" fill="#1b2a4a"/>
+          </marker>
+          <marker id="arrow-right" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#1b2a4a"/>
+          </marker>
+        </defs>
+        <line x1="15" y1="${lineY}" x2="${width - 15}" y2="${lineY}" stroke="#1b2a4a" stroke-width="2" marker-start="url(#arrow-left)" marker-end="url(#arrow-right)"/>
+        ${ticks}
+        ${shade}
+        ${points}
+      </svg>
+    </div>`;
+  }
+
+  function renderCoordGridSVG(cfg) {
+    if (!cfg) return '';
+    const size = 300;
+    const min = -6, max = 6;
+    const pad = 24;
+    const innerSize = size - 2 * pad;
+    const scale = innerSize / (max - min);
+    const toPx = (x) => pad + (x - min) * scale;
+    const toPy = (y) => pad + (max - y) * scale;
+
+    let gridLines = '';
+    for (let v = min; v <= max; v++) {
+      const px = toPx(v);
+      const py = toPy(v);
+      gridLines += `<line x1="${px}" y1="${pad}" x2="${px}" y2="${size - pad}" stroke="#e0dbd2" stroke-width="1"/>`;
+      gridLines += `<line x1="${pad}" y1="${py}" x2="${size - pad}" y2="${py}" stroke="#e0dbd2" stroke-width="1"/>`;
+    }
+
+    const originX = toPx(0);
+    const originY = toPy(0);
+
+    let labels = '';
+    [-4, -2, 2, 4].forEach(v => {
+      labels += `<text x="${toPx(v)}" y="${originY + 14}" text-anchor="middle" font-size="10" fill="#6e685e">${v}</text>`;
+      labels += `<text x="${originX - 10}" y="${toPy(v) + 4}" text-anchor="end" font-size="10" fill="#6e685e">${v}</text>`;
+    });
+
+    let plots = '';
+    if (cfg.p1) {
+      const [x1, y1] = cfg.p1;
+      plots += `<circle cx="${toPx(x1)}" cy="${toPy(y1)}" r="5" fill="#1b2a4a"/>`;
+      plots += `<text x="${toPx(x1) + 8}" y="${toPy(y1) - 6}" font-size="11" font-weight="600" fill="#1b2a4a">(${x1}, ${y1})</text>`;
+    }
+    if (cfg.p2) {
+      const [x2, y2] = cfg.p2;
+      plots += `<circle cx="${toPx(x2)}" cy="${toPy(y2)}" r="5" fill="#e8854a"/>`;
+      plots += `<text x="${toPx(x2) + 8}" y="${toPy(y2) - 6}" font-size="11" font-weight="600" fill="#e8854a">(${x2}, ${y2})</text>`;
+    }
+
+    let linePath = '';
+    if (cfg.line && cfg.p1 && cfg.p2) {
+      const [x1, y1] = cfg.p1;
+      const [x2, y2] = cfg.p2;
+      const dx = x2 - x1;
+      const dy = y2 - y1;
+      if (dx !== 0) {
+        const m = dy / dx;
+        const b = y1 - m * x1;
+        const xStart = min;
+        const yStart = m * xStart + b;
+        const xEnd = max;
+        const yEnd = m * xEnd + b;
+        linePath = `<line x1="${toPx(xStart)}" y1="${toPy(yStart)}" x2="${toPx(xEnd)}" y2="${toPy(yEnd)}" stroke="#5ba4a4" stroke-width="2.5"/>`;
+      }
+    }
+
+    return `
+    <div class="coord-grid-container" style="margin:16px 0;text-align:center;">
+      <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" style="background:#faf9f7;border:1px solid #e0dbd2;border-radius:8px;box-shadow:var(--shadow);">
+        ${gridLines}
+        <line x1="${pad}" y1="${originY}" x2="${size - pad}" y2="${originY}" stroke="#1b2a4a" stroke-width="2"/>
+        <line x1="${originX}" y1="${size - pad}" x2="${originX}" y2="${pad}" stroke="#1b2a4a" stroke-width="2"/>
+        <text x="${size - pad + 12}" y="${originY + 4}" font-size="12" font-weight="700" fill="#1b2a4a">x</text>
+        <text x="${originX}" y="${pad - 8}" font-size="12" font-weight="700" fill="#1b2a4a" text-anchor="middle">y</text>
+        ${labels}
+        ${linePath}
+        ${plots}
+      </svg>
+    </div>`;
+  }
+
+  function cleanStepLabel(label) {
+    if (!label) return '';
+    return label
+      .replace(/\[\d+(\.\d+)?\s*points?\]\s*—\s*/gi, '')
+      .replace(/\[\d+(\.\d+)?\s*point\]\s*—\s*/gi, '')
+      .replace(/—\s*/g, ': ')
+      .trim();
+  }
+
+  function formatAnswerMath(str) {
+    if (!str) return '';
+    const s = String(str).trim();
+    if (s.includes('$')) return s;
+    if (s.length > 25 && !/[\\=]/.test(s)) return escapeHTML(s);
+    return `$${s}$`;
+  }
+
+  function renderFRQQuestion(q, answered, qi, tileNum) {
+    const progress = state.tileProgress[tileNum] || {};
+    const isRevealed = !!(progress.revealed && progress.revealed[qi]);
+    const isGraded = answered != null && answered.selfGrade != null;
+    const isCorrect = isGraded && answered.selfGrade === 'correct';
+    const isWrong = isGraded && answered.selfGrade === 'wrong';
+
+    let visualToolHTML = '';
+    if (q.hasNumberLine && q.numberLineConfig) {
+      visualToolHTML = renderNumberLineSVG(q.numberLineConfig);
+    }
+    if (q.hasCoordGrid && q.coordConfig) {
+      visualToolHTML = renderCoordGridSVG(q.coordConfig);
+    }
+
+    // Hidden vs Revealed Section
+    let revealSectionHTML = '';
+    if (!isRevealed) {
+      revealSectionHTML = `
+      <div class="frq-reveal-container">
+        <button class="btn btn-reveal-solution" id="frq-reveal-btn" data-qi="${qi}" tabindex="0">
+          <span class="reveal-btn-icon">👁️</span> Show Answer & Model Solution
+        </button>
+        <p class="frq-reveal-note">Solve the question on paper first, then reveal the answer to grade your work.</p>
+      </div>`;
+    } else {
+      const answersListHTML = q.fields ? q.fields.map(f => `
+        <div class="frq-answer-item">
+          <div class="frq-step-title">${cleanStepLabel(f.label)}</div>
+          <div class="frq-step-val">${formatAnswerMath(f.correctDisplay || f.correct)}</div>
+        </div>
+      `).join('') : '';
+
+      revealSectionHTML = `
+      <div class="frq-solution-revealed" id="frq-solution-revealed">
+        <div class="frq-solution-header">
+          <span class="solution-header-badge">🎯 Correct Answer & Model Solution</span>
+        </div>
+
+        ${answersListHTML ? `
+          <div class="frq-answers-card">
+            <h4 class="frq-answers-heading">Final Answers:</h4>
+            <div class="frq-answers-grid">${answersListHTML}</div>
+          </div>
+        ` : ''}
+
+        ${q.modelSolution ? `
+          <div class="frq-steps-card">
+            <h4 class="frq-steps-heading">Step-by-Step Solution:</h4>
+            <div class="frq-steps-content">${q.modelSolution}</div>
+          </div>
+        ` : ''}
+
+        ${q.explanation ? `
+          <div class="frq-explanation-card">
+            <h4 class="frq-explanation-heading">Explanation & Notes:</h4>
+            <div class="frq-explanation-content">${q.explanation}</div>
+          </div>
+        ` : ''}
+
+        <div class="frq-self-grade-container">
+          <div class="frq-self-grade-prompt">
+            <h3 class="self-grade-heading">Did you solve this question correctly?</h3>
+            <p class="self-grade-caption">Compare your steps with the solution above and tap one of the buttons below to grade yourself:</p>
+          </div>
+
+          <div class="frq-grade-buttons">
+            <button class="self-grade-btn grade-btn-correct ${isCorrect ? 'selected' : ''}" id="grade-correct-btn" data-qi="${qi}" tabindex="0" aria-label="I solved it correctly">
+              <span class="grade-symbol">✓</span>
+              <span class="grade-btn-text">I solved it correctly</span>
+              <span class="grade-points-tag">+1.0 pt</span>
+            </button>
+
+            <button class="self-grade-btn grade-btn-wrong ${isWrong ? 'selected' : ''}" id="grade-wrong-btn" data-qi="${qi}" tabindex="0" aria-label="I got it wrong">
+              <span class="grade-symbol">✗</span>
+              <span class="grade-btn-text">I got it wrong</span>
+              <span class="grade-points-tag">0.0 pts</span>
+            </button>
+          </div>
+
+          ${isGraded ? `
+            <div class="grade-confirmation ${isCorrect ? 'conf-correct' : 'conf-wrong'}">
+              <span class="conf-icon">${isCorrect ? '✓' : '✗'}</span>
+              <span class="conf-text">
+                ${isCorrect 
+                  ? 'Self-assessment saved: <strong>Correct (1.0 / 1.0 pt)</strong>. Click <strong>Next →</strong> below to proceed.' 
+                  : 'Self-assessment saved: <strong>Incorrect (0.0 / 1.0 pt)</strong>. Review the steps above, then click <strong>Next →</strong> to proceed.'}
+              </span>
+            </div>
+          ` : `
+            <div class="grade-instruction-note">
+              👉 Tap <strong>"I solved it correctly"</strong> (Green) or <strong>"I got it wrong"</strong> (Red) to record your score and unlock the Next button.
+            </div>
+          `}
+        </div>
+      </div>`;
+    }
+
+    return `<div class="frq-fields">${visualToolHTML}${revealSectionHTML}</div>`;
+  }
+
+  function renderHints(q, qi) {
+    if (!q.hints || q.hints.length === 0) return '';
+    const key = `hints_${state.currentTile}_${qi}`;
+    const revealed = state[key] || 0;
+
+    let html = '<div class="hints-section">';
+    for (let i = 0; i < q.hints.length; i++) {
+      if (i <= revealed) {
+        html += `<button class="hint-btn ${i < revealed ? 'active' : ''}" data-hint="${i}" data-qi="${qi}">
+          Hint ${i + 1}
+        </button>`;
+      }
+    }
+    // Show currently revealed hint content
+    if (revealed > 0) {
+      html += `<div class="hint-content">${q.hints[revealed - 1]}</div>`;
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function renderExplanation(q) {
+    if (!q.explanation) return '';
+    return `<div class="explanation-box"><h4>Explanation</h4>${q.explanation}</div>`;
+  }
+
+  function bindPractice() {
+    const backBtn = document.getElementById('back-to-list');
+    const backErrBtn = document.getElementById('back-to-list-err');
+    if (backBtn) backBtn.addEventListener('click', () => {
+      state.currentScreen = 'list';
+      render();
+    });
+    if (backErrBtn) backErrBtn.addEventListener('click', () => {
+      state.currentScreen = 'list';
+      render();
+    });
+
+    // Calculator
+    const calcBtn = document.getElementById('open-calc');
+    if (calcBtn) calcBtn.addEventListener('click', () => Calculator.toggle());
+    document.getElementById('close-calc').addEventListener('click', () => Calculator.toggle());
+
+    // MCQ options
+    document.querySelectorAll('.mcq-option:not(.locked)').forEach(opt => {
+      opt.addEventListener('click', () => {
+        const qi = parseInt(opt.dataset.qi);
+        const oi = parseInt(opt.dataset.oi);
+        handleMCQAnswer(qi, oi);
+      });
+    });
+
+    // FRQ Reveal Answer button
+    const revealBtn = document.getElementById('frq-reveal-btn');
+    if (revealBtn) {
+      revealBtn.addEventListener('click', () => {
+        const tileNum = state.currentTile;
+        const qi = state.currentQuestionIndex;
+        const progress = state.tileProgress[tileNum];
+        if (!progress.revealed) progress.revealed = {};
+        progress.revealed[qi] = true;
+        saveState();
+        render();
+        setTimeout(() => {
+          const el = document.getElementById('frq-solution-revealed');
+          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }, 60);
+      });
+    }
+
+    // FRQ Self-Grade Green (Correct) button
+    const gradeCorrectBtn = document.getElementById('grade-correct-btn');
+    if (gradeCorrectBtn) {
+      gradeCorrectBtn.addEventListener('click', () => {
+        const tileNum = state.currentTile;
+        const qi = state.currentQuestionIndex;
+        const progress = state.tileProgress[tileNum];
+        progress.answers[qi] = { selfGrade: 'correct', pointsEarned: 1, pointsPossible: 1 };
+        saveState();
+        render();
+      });
+    }
+
+    // FRQ Self-Grade Red (Wrong) button
+    const gradeWrongBtn = document.getElementById('grade-wrong-btn');
+    if (gradeWrongBtn) {
+      gradeWrongBtn.addEventListener('click', () => {
+        const tileNum = state.currentTile;
+        const qi = state.currentQuestionIndex;
+        const progress = state.tileProgress[tileNum];
+        progress.answers[qi] = { selfGrade: 'wrong', pointsEarned: 0, pointsPossible: 1 };
+        saveState();
+        render();
+      });
+    }
+
+    // Hints
+    document.querySelectorAll('.hint-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const hintIdx = parseInt(btn.dataset.hint);
+        const qi = parseInt(btn.dataset.qi);
+        const key = `hints_${state.currentTile}_${qi}`;
+        const current = state[key] || 0;
+        if (hintIdx === current && current < 3) {
+          state[key] = current + 1;
+          render();
+        } else if (hintIdx < current) {
+          state[key] = hintIdx + 1;
+          render();
+        }
+      });
+    });
+
+    // Navigation
+    const prevBtn = document.getElementById('prev-q');
+    const nextBtn = document.getElementById('next-q');
+    const finishBtn = document.getElementById('finish-set');
+
+    if (prevBtn) prevBtn.addEventListener('click', () => {
+      state.currentQuestionIndex = Math.max(0, state.currentQuestionIndex - 1);
+      render();
+    });
+    if (nextBtn) nextBtn.addEventListener('click', () => {
+      state.currentQuestionIndex++;
+      render();
+    });
+    if (finishBtn) finishBtn.addEventListener('click', () => finishSet());
+  }
+
+  function handleMCQAnswer(qi, oi) {
+    const progress = state.tileProgress[state.currentTile];
+    if (progress.answers[qi] != null) return; // Already answered
+    progress.answers[qi] = oi;
+    saveState();
+    render();
+  }
+
+  function finishSet() {
+    const tileNum = state.currentTile;
+    const info = getTileInfo(tileNum);
+    const questions = generateQuestions(tileNum, state.currentSeed);
+    const progress = state.tileProgress[tileNum];
+
+    // Calculate score: 1 point per question
+    let totalScore = 0;
+    const totalPossible = questions.length; // 12 for MCQ, 5 for FRQ
+
+    questions.forEach((q, i) => {
+      const ans = progress.answers[i];
+      if (ans == null) return;
+      if (info.type === 'mcq') {
+        // MCQ: 1 point if first answer is correct
+        if (q.options && q.options[ans] && q.options[ans].correct) totalScore += 1;
+      } else {
+        // FRQ: use pointsEarned from selfGrade (1 for correct, 0 for wrong)
+        if (ans && ans.pointsEarned != null) totalScore += ans.pointsEarned;
+      }
+    });
+
+    progress.score = totalScore;
+    progress.total = totalPossible;
+    progress.completed = true;
+
+    // Check lesson mastery
+    const lessons = getTileLessons(tileNum);
+    let masteryTriggered = false;
+    
+    for (const lesson of lessons) {
+      if (isLessonComplete(lesson)) {
+        const ls = getLessonScore(lesson);
+        const scorePct = ls.total > 0 ? Math.round((ls.score / ls.total) * 100) : 0;
+        const mastered = ls.total > 0 && (ls.score / ls.total) >= CONFIG.MASTERY_THRESHOLD;
+
+        if (mastered) {
+          // Check if already earned
+          if (!state.certificates.find(c => c.lesson === lesson)) {
+            state.certificates.push({
+              lesson,
+              score: ls.score,
+              total: ls.total,
+              scorePct,
+              date: new Date().toLocaleDateString('en-GB', { year: 'numeric', month: 'long', day: 'numeric' }),
+            });
+          }
+          state.masteryContext = { lesson, scorePct, mastered: true };
+          masteryTriggered = true;
+        } else {
+          state.masteryContext = { lesson, scorePct, mastered: false, target: Math.round(CONFIG.MASTERY_THRESHOLD * 100) };
+          masteryTriggered = true;
+        }
+      }
+    }
+
+    state.currentScreen = masteryTriggered ? 'mastery' : 'results';
+    saveState();
+    render();
+  }
+
+  // ── RESULTS ────────────────────────────────────────
+  function renderResults() {
+    const tileNum = state.currentTile;
+    const progress = state.tileProgress[tileNum];
+    const info = getTileInfo(tileNum);
+    const questions = generateQuestions(tileNum, state.currentSeed);
+    const score = progress.score;
+    const total = progress.total;
+    const pct = total > 0 ? Math.round((score / total) * 100) : 0;
+    
+    let msg = pct >= 90 ? 'Excellent work! 🌟' : pct >= 70 ? 'Great job! Keep it up! 💪' : pct >= 50 ? 'Good effort! Review the explanations.' : 'Keep practising — you\'ll get there! 📚';
+
+    let reviewHTML = questions.map((q, i) => {
+      const ans = progress.answers[i];
+      let mark = 'wrong';
+      let markText = '✗ 0/1';
+      
+      if (info.type === 'mcq') {
+        if (ans != null && q.options && q.options[ans] && q.options[ans].correct) {
+          mark = 'correct'; markText = '✓ Correct (1/1)';
+        } else {
+          markText = '✗ Incorrect (0/1)';
+        }
+      } else {
+        if (ans && ans.pointsEarned != null) {
+          if (ans.pointsEarned >= 1) { 
+            mark = 'correct'; 
+            markText = '✓ Correct (1/1)'; 
+          } else { 
+            mark = 'wrong'; 
+            markText = '✗ Incorrect (0/1)'; 
+          }
+        }
+      }
+
+      return `<div class="review-item">
+        <div class="review-q-header">
+          <span class="review-q-num">Question ${i + 1}</span>
+          <span class="review-mark ${mark}">${markText}</span>
+        </div>
+        <div class="question-text" style="font-size:0.95rem;">${q.text || ''}</div>
+        ${info.type === 'frq' && q.fields ? `
+          <div class="review-answers-box" style="margin-top:10px;padding:12px;background:#faf8f3;border-radius:6px;border-left:3px solid var(--teal);">
+            <strong style="color:var(--navy);font-size:0.9rem;">Expected Answers:</strong>
+            <ul style="margin:6px 0 0 18px;font-size:0.9rem;color:var(--gray-700);">
+              ${q.fields.map(f => `<li><strong>${cleanStepLabel(f.label)}:</strong> ${formatAnswerMath(f.correctDisplay || f.correct)}</li>`).join('')}
+            </ul>
+          </div>
+        ` : ''}
+        ${q.modelSolution ? `<div class="explanation-box" style="margin-top:8px;"><h4>Model Solution</h4>${q.modelSolution}</div>` : ''}
+        ${q.explanation ? `<div class="explanation-box" style="margin-top:8px;"><h4>Explanation</h4>${q.explanation}</div>` : ''}
+      </div>`;
+    }).join('');
+
+    return `
+    <div class="results-screen">
+      <header class="section-header">
+        <button class="back-btn" id="back-to-list" aria-label="Back to list">←</button>
+        <h2 class="section-title">Results · Q${tileNum}</h2>
+      </header>
+      <div class="results-card">
+        <div class="results-score">${formatScore(score)} / ${total}</div>
+        <div class="results-pct">${pct}%</div>
+        <div class="results-msg">${msg}</div>
+        <div class="results-actions">
+          <button class="btn btn-accent" id="retry-btn">🔄 Retry with new numbers</button>
+          <button class="btn btn-secondary" id="print-btn">🖨 Print / Save as PDF</button>
+          <button class="btn btn-primary" id="back-list-btn">← Back to list</button>
+        </div>
+      </div>
+      <div class="results-review">${reviewHTML}</div>
+    </div>`;
+  }
+
+  function bindResults() {
+    document.getElementById('back-to-list')?.addEventListener('click', () => {
+      state.currentScreen = 'list';
+      render();
+    });
+    document.getElementById('retry-btn')?.addEventListener('click', () => {
+      startPractice(state.currentTile, Date.now());
+    });
+    document.getElementById('print-btn')?.addEventListener('click', () => window.print());
+    document.getElementById('back-list-btn')?.addEventListener('click', () => {
+      state.currentScreen = 'list';
+      render();
+    });
+  }
+
+  // ── MASTERY ────────────────────────────────────────
+  function renderMastery() {
+    const ctx = state.masteryContext;
+    if (!ctx) { state.currentScreen = 'results'; render(); return ''; }
+
+    if (ctx.mastered) {
+      // Show certificate
+      setTimeout(() => Confetti.launch(3000), 300);
+      const certData = {
+        studentName: state.studentName,
+        lessonNumber: ctx.lesson,
+        scorePct: ctx.scorePct,
+        teacherName: CONFIG.TEACHER_NAME,
+        schoolName: CONFIG.SCHOOL_NAME,
+      };
+      return `
+      <div class="mastery-screen">
+        <header class="section-header">
+          <button class="back-btn" id="back-to-results" aria-label="Back">←</button>
+          <h2 class="section-title">🎉 Lesson ${ctx.lesson} Mastered!</h2>
+        </header>
+        <div class="mastery-msg">
+          <h3>Congratulations! 🌟</h3>
+          <p>You mastered Lesson ${ctx.lesson} with a score of ${ctx.scorePct}%!</p>
+          <div class="results-actions">
+            <button class="btn btn-gold" id="view-cert">🏅 View Certificate</button>
+            <button class="btn btn-primary" id="back-list-btn">← Back to list</button>
+          </div>
+        </div>
+      </div>`;
+    } else {
+      const lessonTiles = LESSON_GROUPS[ctx.lesson] || [];
+      const retryBtns = lessonTiles.map(t => {
+        const p = state.tileProgress[t];
+        const tScore = p ? `${formatScore(p.score)}/${p.total}` : 'Not attempted';
+        return `<button class="btn btn-accent retry-tile-btn" data-tile="${t}">Retry Q${t} (${tScore})</button>`;
+      }).join('');
+
+      return `
+      <div class="mastery-screen">
+        <header class="section-header">
+          <button class="back-btn" id="back-to-results" aria-label="Back">←</button>
+          <h2 class="section-title">Lesson ${ctx.lesson}</h2>
+        </header>
+        <div class="mastery-msg">
+          <h3>Almost there! 💪</h3>
+          <p>Your lesson score is ${ctx.scorePct}%. You need more than ${ctx.target}% to earn mastery.</p>
+          <p>Try these sets again to improve:</p>
+          <div class="mastery-retry-btns">${retryBtns}</div>
+          <div style="margin-top:16px;">
+            <button class="btn btn-primary" id="back-list-btn">← Back to list</button>
+          </div>
+        </div>
+      </div>`;
+    }
+  }
+
+  function bindMastery() {
+    document.getElementById('back-to-results')?.addEventListener('click', () => {
+      state.currentScreen = 'results';
+      render();
+    });
+    document.getElementById('view-cert')?.addEventListener('click', () => {
+      const ctx = state.masteryContext;
+      if (ctx) {
+        state.currentScreen = 'certificate-view';
+        render();
+      }
+    });
+    document.getElementById('back-list-btn')?.addEventListener('click', () => {
+      state.currentScreen = 'list';
+      render();
+    });
+    document.querySelectorAll('.retry-tile-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        startPractice(parseInt(btn.dataset.tile), Date.now());
+      });
+    });
+  }
+
+  // ── CERTIFICATE VIEW ──────────────────────────────
+  function renderCertificateView() {
+    const ctx = state.masteryContext;
+    if (!ctx) { state.currentScreen = 'list'; render(); return ''; }
+
+    const certData = {
+      studentName: state.studentName,
+      lessonNumber: ctx.lesson,
+      scorePct: ctx.scorePct,
+      teacherName: CONFIG.TEACHER_NAME,
+      schoolName: CONFIG.SCHOOL_NAME,
+    };
+
+    return `
+    <div class="certificate-screen">
+      <header class="section-header">
+        <button class="back-btn" id="back-to-mastery" aria-label="Back">←</button>
+        <h2 class="section-title">Certificate · Lesson ${ctx.lesson}</h2>
+        <div class="results-actions">
+          <button class="btn btn-secondary" id="cert-pdf">📄 Download PDF</button>
+          <button class="btn btn-secondary" id="cert-png">🖼 Download PNG</button>
+          <button class="btn btn-secondary" id="cert-print">🖨 Print</button>
+          <button class="btn btn-primary" id="back-list-btn">← Back to list</button>
+        </div>
+      </header>
+      <div style="overflow-x:auto;padding:24px 0;">
+        ${CertificateGen.generateCertificateHTML(certData)}
+      </div>
+    </div>`;
+  }
+
+  function bindCertificateView() {
+    document.getElementById('back-to-mastery')?.addEventListener('click', () => {
+      state.currentScreen = 'mastery';
+      render();
+    });
+    document.getElementById('cert-pdf')?.addEventListener('click', () => {
+      const lesson = state.masteryContext?.lesson;
+      if (lesson) CertificateGen.downloadPDF(lesson);
+    });
+    document.getElementById('cert-png')?.addEventListener('click', () => {
+      const lesson = state.masteryContext?.lesson;
+      if (lesson) CertificateGen.downloadPNG(lesson);
+    });
+    document.getElementById('cert-print')?.addEventListener('click', () => {
+      const lesson = state.masteryContext?.lesson;
+      if (lesson) CertificateGen.printCert(lesson);
+    });
+    document.getElementById('back-list-btn')?.addEventListener('click', () => {
+      state.currentScreen = 'list';
+      render();
+    });
+  }
+
+  // ── CERTIFICATES LIST ─────────────────────────────
+  function renderCertificates() {
+    const certs = state.certificates;
+    let list = '';
+    if (certs.length === 0) {
+      list = '<p style="text-align:center;color:var(--gray-400);padding:40px;">No certificates earned yet. Master a lesson to earn one!</p>';
+    } else {
+      list = certs.map(c => `
+        <div class="cert-item">
+          <div class="cert-item-info">
+            <h4>🏅 Lesson ${c.lesson} Mastered</h4>
+            <p>Score: ${c.scorePct}% · ${c.date}</p>
+          </div>
+          <div class="cert-item-actions">
+            <button class="btn btn-secondary btn-sm cert-view-btn" data-lesson="${c.lesson}" data-score="${c.scorePct}">View</button>
+            <button class="btn btn-secondary btn-sm cert-pdf-btn" data-lesson="${c.lesson}">PDF</button>
+            <button class="btn btn-secondary btn-sm cert-png-btn" data-lesson="${c.lesson}" data-score="${c.scorePct}">PNG</button>
+            <button class="btn btn-secondary btn-sm cert-print-btn" data-lesson="${c.lesson}">Print</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    return `
+    <div class="certificates-screen">
+      <header class="section-header">
+        <button class="back-btn" id="back-to-list" aria-label="Back">←</button>
+        <h2 class="section-title">Certificates</h2>
+      </header>
+      <div class="cert-list">${list}</div>
+    </div>`;
+  }
+
+  function bindCertificates() {
+    document.getElementById('back-to-list')?.addEventListener('click', () => {
+      state.currentScreen = 'list';
+      render();
+    });
+    document.querySelectorAll('.cert-view-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const lesson = btn.dataset.lesson;
+        const scorePct = parseInt(btn.dataset.score);
+        state.masteryContext = { lesson, scorePct, mastered: true };
+        state.currentScreen = 'certificate-view';
+        render();
+      });
+    });
+    document.querySelectorAll('.cert-pdf-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const lesson = btn.dataset.lesson;
+        printCertWithContainer(lesson);
+      });
+    });
+    document.querySelectorAll('.cert-png-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const lesson = btn.dataset.lesson;
+        const scorePct = parseInt(btn.dataset.score);
+        const certData = {
+          studentName: state.studentName,
+          lessonNumber: lesson,
+          scorePct,
+          teacherName: CONFIG.TEACHER_NAME,
+          schoolName: CONFIG.SCHOOL_NAME,
+        };
+        const container = document.createElement('div');
+        container.style.position = 'absolute';
+        container.style.left = '-9999px';
+        container.innerHTML = CertificateGen.generateCertificateHTML(certData);
+        document.body.appendChild(container);
+        await CertificateGen.downloadPNG(lesson);
+        container.remove();
+      });
+    });
+    document.querySelectorAll('.cert-print-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const lesson = btn.dataset.lesson;
+        printCertWithContainer(lesson);
+      });
+    });
+  }
+
+  function printCertWithContainer(lesson) {
+    const cert = state.certificates.find(c => c.lesson === lesson);
+    const scorePct = cert ? cert.scorePct : 100;
+    const certData = {
+      studentName: state.studentName,
+      lessonNumber: lesson,
+      scorePct,
+      teacherName: CONFIG.TEACHER_NAME,
+      schoolName: CONFIG.SCHOOL_NAME,
+    };
+    const container = document.createElement('div');
+    container.innerHTML = CertificateGen.generateCertificateHTML(certData);
+    document.body.appendChild(container);
+    CertificateGen.printCert(lesson);
+    setTimeout(() => container.remove(), 1000);
+  }
+
+  // ── Utility ────────────────────────────────────────
+  function formatScore(n) {
+    if (n == null) return '0';
+    return Number.isInteger(n) ? String(n) : n.toFixed(1);
+  }
+
+  function escapeHTML(s) {
+    if (!s) return '';
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  function escapeAttr(s) {
+    return (s || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  // ── Init ───────────────────────────────────────────
+  function init() {
+    render();
+    Calculator.init();
+    
+    // Keyboard shortcuts
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        const calcModal = document.getElementById('calc-modal');
+        if (calcModal && !calcModal.classList.contains('hidden')) {
+          calcModal.classList.add('hidden');
+        }
+      }
+    });
+  }
+
+  // Wait for DOM + KaTeX
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
