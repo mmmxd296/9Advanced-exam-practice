@@ -2,6 +2,130 @@
 (() => {
   'use strict';
 
+  // ── Teacher & Student Activity Tracker (localStorage) ──
+  const TRACKER_KEY = 'eot_teacher_tracker_v1';
+  const TEACHER_CODE = '5113';
+
+  const Tracker = {
+    getData() {
+      try {
+        const d = localStorage.getItem(TRACKER_KEY);
+        return d ? JSON.parse(d) : { students: {} };
+      } catch { return { students: {} }; }
+    },
+    saveData(data) {
+      try {
+        localStorage.setItem(TRACKER_KEY, JSON.stringify(data));
+      } catch (e) { console.error('Tracker save error', e); }
+    },
+    getStudent(name) {
+      if (!name) return null;
+      const data = this.getData();
+      return data.students[name.trim()] || null;
+    },
+    loginStudent(name) {
+      if (!name) return null;
+      const clean = name.trim();
+      const data = this.getData();
+      const now = new Date().toISOString();
+      const displayTime = new Date().toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+      if (!data.students[clean]) {
+        data.students[clean] = {
+          name: clean,
+          firstSeen: now,
+          firstSeenDisplay: displayTime,
+          lastSeen: now,
+          lastSeenDisplay: displayTime,
+          visits: 1,
+          tileAttempts: {},
+          history: [],
+          certificates: [],
+          activities: [
+            { type: 'login', text: 'First login to practice platform', time: displayTime }
+          ]
+        };
+      } else {
+        const s = data.students[clean];
+        s.lastSeen = now;
+        s.lastSeenDisplay = displayTime;
+        s.visits = (s.visits || 1) + 1;
+        s.activities = s.activities || [];
+        s.activities.unshift({ type: 'login', text: `Session access (visit #${s.visits})`, time: displayTime });
+      }
+      this.saveData(data);
+      return data.students[clean];
+    },
+    recordAttempt(name, tileNum, score, total, type) {
+      if (!name) return 1;
+      const clean = name.trim();
+      const data = this.getData();
+      if (!data.students[clean]) this.loginStudent(clean);
+      const s = data.students[clean];
+
+      s.tileAttempts = s.tileAttempts || {};
+      const attemptNum = (s.tileAttempts[tileNum] || 0) + 1;
+      s.tileAttempts[tileNum] = attemptNum;
+
+      const dateStr = new Date().toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+      const pct = total > 0 ? Math.round((score / total) * 100) : 0;
+
+      s.history = s.history || [];
+      s.history.unshift({
+        tile: tileNum,
+        type: type,
+        score: score,
+        total: total,
+        pct: pct,
+        attemptNumber: attemptNum,
+        date: dateStr
+      });
+
+      s.activities = s.activities || [];
+      s.activities.unshift({
+        type: 'attempt',
+        text: `Completed Q${tileNum} (${type.toUpperCase()}) — Score: ${score}/${total} (${pct}%) [Attempt #${attemptNum}]`,
+        time: dateStr
+      });
+
+      this.saveData(data);
+      return attemptNum;
+    },
+    recordCertificate(name, lesson, scorePct, attemptNum) {
+      if (!name) return;
+      const clean = name.trim();
+      const data = this.getData();
+      if (!data.students[clean]) this.loginStudent(clean);
+      const s = data.students[clean];
+
+      s.certificates = s.certificates || [];
+      const dateStr = new Date().toLocaleDateString('en-GB', { year: 'numeric', month: 'long', day: 'numeric' });
+      const timeStr = new Date().toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+      const existing = s.certificates.find(c => c.lesson === lesson);
+      if (!existing) {
+        s.certificates.push({
+          lesson,
+          scorePct,
+          attemptNumber: attemptNum || 1,
+          date: dateStr
+        });
+      }
+
+      s.activities = s.activities || [];
+      s.activities.unshift({
+        type: 'certificate',
+        text: `Mastered Lesson ${lesson} (${scorePct}%) [Attempt #${attemptNum || 1}]`,
+        time: timeStr
+      });
+
+      this.saveData(data);
+    },
+    clearAll() {
+      this.saveData({ students: {} });
+    }
+  };
+
   // ── State ──────────────────────────────────────────
   const STATE_KEY = 'eot_math_state';
   let state = loadState();
@@ -9,14 +133,14 @@
   function defaultState() {
     return {
       studentName: '',
-      currentScreen: 'landing', // landing | list | practice | results | certificates | certificate-view | mastery
+      currentScreen: 'entry', // starts with mandatory name requirement screen
       currentSection: null,     // 'mcq' | 'frq'
       currentTile: null,
       currentQuestionIndex: 0,
       currentSeed: Date.now(),
-      // per-tile: { [tile]: { answers: [], score: null, total: null, completed: false, seed } }
+      // per-tile: { [tile]: { answers: [], score: null, total: null, completed: false, seed, attemptNumber } }
       tileProgress: {},
-      // certificates earned: [{ lesson, score, scorePct, date }]
+      // certificates earned: [{ lesson, score, scorePct, date, attemptNumber }]
       certificates: [],
       // mastery check context
       masteryContext: null,
@@ -37,7 +161,11 @@
   // ── Router ─────────────────────────────────────────
   function render() {
     const app = document.getElementById('app');
+    if (!state.studentName && state.currentScreen !== 'teacher-dashboard') {
+      state.currentScreen = 'entry';
+    }
     switch (state.currentScreen) {
+      case 'entry': app.innerHTML = renderEntry(); bindEntry(); break;
       case 'landing': app.innerHTML = renderLanding(); bindLanding(); break;
       case 'list': app.innerHTML = renderList(); bindList(); break;
       case 'practice': app.innerHTML = renderPractice(); bindPractice(); break;
@@ -45,6 +173,7 @@
       case 'certificates': app.innerHTML = renderCertificates(); bindCertificates(); break;
       case 'certificate-view': app.innerHTML = renderCertificateView(); bindCertificateView(); break;
       case 'mastery': app.innerHTML = renderMastery(); bindMastery(); break;
+      case 'teacher-dashboard': app.innerHTML = renderTeacherDashboard(); bindTeacherDashboard(); break;
     }
     // Render KaTeX
     if (window.renderMathInElement) {
@@ -133,8 +262,131 @@
     }).filter(Boolean);
   }
 
+  // ── ENTRY SCREEN (Mandatory Name / Secret 5113) ────
+  function renderEntry() {
+    return `
+    <div class="entry-screen">
+      <div class="entry-card">
+        <div class="entry-logos">
+          <img src="assets/math-logo-trimmed.png" alt="Mathematics Exam" class="logo-math">
+          <div class="logo-school-wrap">
+            <img src="assets/school-logo.png" alt="Zayed Educational Complex" class="logo-school">
+          </div>
+        </div>
+        <div class="entry-header">
+          <h1 class="entry-title">End of Term Exam Practice</h1>
+          <p class="entry-subtitle">Grade 9 Advanced Mathematics · Reveal Integrated 1</p>
+          <span class="entry-school-badge">${CONFIG.SCHOOL_NAME}</span>
+        </div>
+        <div class="entry-form">
+          <label for="entry-name-input" class="entry-label">Enter your name to start practice:</label>
+          <div class="entry-input-wrap">
+            <input type="text" id="entry-name-input" class="entry-input" placeholder="Your Full Name / اكتب اسمك هنا" autocomplete="name" dir="auto" autofocus>
+            <span class="entry-input-icon">✏️</span>
+          </div>
+          <p class="entry-hint" id="entry-hint">All attempts and certificates will be saved under your name.</p>
+          <button id="entry-start-btn" class="btn btn-primary entry-start-btn" disabled>
+            Start Practice →
+          </button>
+        </div>
+        <div class="entry-footer">
+          <span class="teacher-credit">Instructor: <strong>${CONFIG.TEACHER_NAME}</strong></span>
+          <button class="teacher-quick-btn" id="teacher-code-prompt" title="Instructor Access (5113)">
+            🔒 Teacher Portal
+          </button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function bindEntry() {
+    const input = document.getElementById('entry-name-input');
+    const btn = document.getElementById('entry-start-btn');
+    const hint = document.getElementById('entry-hint');
+    const teacherPrompt = document.getElementById('teacher-code-prompt');
+    if (!input || !btn) return;
+
+    if (typeof input.focus === 'function') {
+      try { input.focus(); } catch (e) {}
+    }
+
+    input.addEventListener('input', () => {
+      const val = input.value.trim();
+      if (val === TEACHER_CODE) {
+        btn.disabled = false;
+        btn.classList.add('teacher-btn');
+        btn.innerHTML = '🔑 Open Teacher Dashboard →';
+        if (hint) hint.innerHTML = '<span class="teacher-code-alert">Teacher passcode 5113 recognized! Click above to open tracker.</span>';
+      } else if (val.length >= 2) {
+        btn.disabled = false;
+        btn.classList.remove('teacher-btn');
+        btn.innerHTML = 'Start Practice →';
+        if (hint) hint.innerHTML = 'All attempts and certificates will be saved under your name.';
+      } else {
+        btn.disabled = true;
+        btn.classList.remove('teacher-btn');
+        btn.innerHTML = 'Start Practice →';
+        if (hint) hint.innerHTML = 'All attempts and certificates will be saved under your name.';
+      }
+    });
+
+    const submitEntry = () => {
+      const val = input.value.trim();
+      if (val === TEACHER_CODE) {
+        state.currentScreen = 'teacher-dashboard';
+        render();
+      } else if (val.length >= 2) {
+        loginStudent(val);
+        state.currentScreen = 'landing';
+        render();
+      }
+    };
+
+    btn.addEventListener('click', submitEntry);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !btn.disabled) submitEntry();
+    });
+
+    if (teacherPrompt) {
+      teacherPrompt.addEventListener('click', () => {
+        const code = prompt('Enter Teacher Passcode (5113):');
+        if (code && code.trim() === TEACHER_CODE) {
+          state.currentScreen = 'teacher-dashboard';
+          render();
+        } else if (code) {
+          alert('Incorrect passcode.');
+        }
+      });
+    }
+  }
+
+  function loginStudent(name) {
+    state.studentName = name.trim();
+    const student = Tracker.loginStudent(state.studentName);
+    if (student) {
+      // Restore student's certificates if any
+      if (student.certificates && student.certificates.length > 0) {
+        state.certificates = student.certificates.map(c => ({
+          lesson: c.lesson,
+          scorePct: c.scorePct,
+          attemptNumber: c.attemptNumber || 1,
+          date: c.date,
+          studentName: state.studentName,
+          teacherName: CONFIG.TEACHER_NAME,
+          schoolName: CONFIG.SCHOOL_NAME,
+        }));
+      }
+    }
+    saveState();
+  }
+
   // ── LANDING ────────────────────────────────────────
   function renderLanding() {
+    const student = Tracker.getStudent(state.studentName);
+    const completedCount = student?.history ? new Set(student.history.map(h => h.tile)).size : 0;
+    const certsCount = student?.certificates ? student.certificates.length : state.certificates.length;
+    const latestAttempt = student?.history?.[0]?.attemptNumber || 0;
+
     return `
     <div class="landing">
       <header class="landing-header">
@@ -160,7 +412,19 @@
         </button>
       </div>
       <footer class="landing-footer">
-        <div></div>
+        <div class="footer-profile-col">
+          <button class="student-profile-pill" id="open-student-profile" title="View my progress, attempts and certificates">
+            <span class="profile-avatar">👤</span>
+            <div class="profile-info">
+              <span class="profile-name">${escapeHTML(state.studentName)}</span>
+              <span class="profile-meta">
+                <span>${completedCount} completed</span> • 
+                <span>${certsCount} certs</span>
+                ${latestAttempt > 0 ? `<small class="attempt-badge">Att. #${latestAttempt}</small>` : ''}
+              </span>
+            </div>
+          </button>
+        </div>
         <p class="teacher-name">${CONFIG.TEACHER_NAME}</p>
         <div class="banner-wrap">
           <img src="assets/banner.jpg" alt="School Banner" class="banner-img">
@@ -170,42 +434,137 @@
   }
 
   function bindLanding() {
-    document.getElementById('card-mcq').addEventListener('click', () => openSection('mcq'));
-    document.getElementById('card-frq').addEventListener('click', () => openSection('frq'));
+    document.getElementById('card-mcq')?.addEventListener('click', () => openSection('mcq'));
+    document.getElementById('card-frq')?.addEventListener('click', () => openSection('frq'));
+    document.getElementById('open-student-profile')?.addEventListener('click', () => showStudentProfileModal());
   }
 
   function openSection(section) {
-    if (!state.studentName) {
-      showNameModal(section);
-    } else {
-      state.currentSection = section;
-      state.currentScreen = 'list';
-      render();
-    }
+    state.currentSection = section;
+    state.currentScreen = 'list';
+    render();
   }
 
-  function showNameModal(section) {
-    const modal = document.getElementById('name-modal');
-    modal.classList.remove('hidden');
-    const input = document.getElementById('student-name-input');
-    const btn = document.getElementById('start-btn');
-    input.value = '';
-    input.focus();
-    btn.disabled = true;
+  function showStudentProfileModal() {
+    const modal = document.getElementById('profile-modal');
+    const content = document.getElementById('profile-modal-content');
+    const closeBtn = document.getElementById('close-profile-modal');
+    if (!modal || !content) return;
 
-    input.oninput = () => {
-      btn.disabled = input.value.trim().length < 2;
+    const student = Tracker.getStudent(state.studentName) || {
+      name: state.studentName,
+      history: [],
+      certificates: state.certificates,
+      firstSeenDisplay: 'Today',
+      lastSeenDisplay: 'Today',
+      visits: 1
     };
-    input.onkeydown = (e) => {
-      if (e.key === 'Enter' && !btn.disabled) btn.click();
-    };
-    btn.onclick = () => {
-      state.studentName = input.value.trim();
-      modal.classList.add('hidden');
-      state.currentSection = section;
-      state.currentScreen = 'list';
+
+    const completedTiles = student.history || [];
+    const certs = student.certificates || state.certificates || [];
+
+    content.innerHTML = `
+      <div class="profile-modal-body">
+        <div class="profile-header-card">
+          <div class="profile-avatar-lg">👤</div>
+          <div>
+            <h2 class="profile-student-title">${escapeHTML(student.name)}</h2>
+            <div class="profile-time-info">
+              <span>First session: ${student.firstSeenDisplay || 'Today'}</span> • 
+              <span>Sessions: <strong>${student.visits || 1}</strong></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="profile-stats-grid">
+          <div class="stat-box">
+            <span class="stat-number">${new Set(completedTiles.map(h => h.tile)).size} / 25</span>
+            <span class="stat-desc">Sets Completed</span>
+          </div>
+          <div class="stat-box">
+            <span class="stat-number">${completedTiles.length}</span>
+            <span class="stat-desc">Total Attempts</span>
+          </div>
+          <div class="stat-box">
+            <span class="stat-number">${certs.length}</span>
+            <span class="stat-desc">Certificates</span>
+          </div>
+        </div>
+
+        <div class="profile-section">
+          <h4 class="profile-section-title">Certificates Earned:</h4>
+          ${certs.length > 0 ? `
+            <div class="profile-certs-grid">
+              ${certs.map(c => `
+                <div class="profile-cert-card">
+                  <span class="cert-star">★</span>
+                  <div class="cert-card-text">
+                    <strong>Lesson ${c.lesson} Mastery</strong> (${c.scorePct}%)
+                    <small class="attempt-badge">Attempt #${c.attemptNumber || 1}</small>
+                    <div class="cert-date">${c.date}</div>
+                  </div>
+                  <button class="btn btn-secondary btn-sm profile-open-cert" data-lesson="${c.lesson}" data-score="${c.scorePct}">View</button>
+                </div>
+              `).join('')}
+            </div>
+          ` : '<p class="profile-empty-text">No certificates earned yet. Achieve ≥ 80% on a lesson to earn your certificate!</p>'}
+        </div>
+
+        <div class="profile-section">
+          <h4 class="profile-section-title">Completed Practice Sets History:</h4>
+          ${completedTiles.length > 0 ? `
+            <div class="profile-history-list">
+              ${completedTiles.map(h => {
+                const info = getTileInfo(h.tile);
+                return `
+                <div class="profile-history-row">
+                  <div class="history-q-col">
+                    <span class="history-q-badge">Q${h.tile}</span>
+                    <div>
+                      <span class="history-q-type">${h.type.toUpperCase()} · P.${info ? info.pages : ''} · L ${info ? info.lessons : ''}</span>
+                      <div class="history-q-date">${h.date}</div>
+                    </div>
+                  </div>
+                  <div class="history-score-col">
+                    <span class="history-score-num">${h.score}/${h.total} (${h.pct}%)</span>
+                    <small class="attempt-badge">Attempt #${h.attemptNumber}</small>
+                  </div>
+                </div>`;
+              }).join('')}
+            </div>
+          ` : '<p class="profile-empty-text">No practice sets completed yet. Choose MCQ or FRQ to start!</p>'}
+        </div>
+
+        <div class="profile-modal-actions">
+          <button class="btn btn-primary" id="profile-close-btn">Close</button>
+          <button class="btn btn-secondary" id="profile-switch-btn">Switch Student</button>
+        </div>
+      </div>
+    `;
+
+    modal.classList.remove('hidden');
+
+    const closeModal = () => modal.classList.add('hidden');
+    closeBtn.onclick = closeModal;
+    document.getElementById('profile-close-btn').onclick = closeModal;
+
+    document.getElementById('profile-switch-btn').onclick = () => {
+      closeModal();
+      state.studentName = '';
+      state.currentScreen = 'entry';
       render();
     };
+
+    content.querySelectorAll('.profile-open-cert').forEach(btn => {
+      btn.addEventListener('click', () => {
+        closeModal();
+        const lesson = btn.dataset.lesson;
+        const scorePct = parseInt(btn.dataset.score);
+        state.masteryContext = { lesson, scorePct, mastered: true };
+        state.currentScreen = 'certificate-view';
+        render();
+      });
+    });
   }
 
   // ── QUESTION LIST ──────────────────────────────────
@@ -256,10 +615,9 @@
       render();
     });
     document.getElementById('change-student').addEventListener('click', () => {
-      if (confirm('This will clear your name and all progress. Continue?')) {
-        state = defaultState();
-        render();
-      }
+      state.studentName = '';
+      state.currentScreen = 'entry';
+      render();
     });
     document.getElementById('open-certs').addEventListener('click', () => {
       state.currentScreen = 'certificates';
@@ -785,6 +1143,16 @@
     progress.total = totalPossible;
     progress.completed = true;
 
+    // Record attempt in persistent tracker
+    const attemptNum = Tracker.recordAttempt(
+      state.studentName,
+      tileNum,
+      totalScore,
+      totalPossible,
+      info.type
+    );
+    progress.attemptNumber = attemptNum;
+
     // Check lesson mastery
     const lessons = getTileLessons(tileNum);
     let masteryTriggered = false;
@@ -796,20 +1164,21 @@
         const mastered = ls.total > 0 && (ls.score / ls.total) >= CONFIG.MASTERY_THRESHOLD;
 
         if (mastered) {
-          // Check if already earned
+          Tracker.recordCertificate(state.studentName, lesson, scorePct, attemptNum);
           if (!state.certificates.find(c => c.lesson === lesson)) {
             state.certificates.push({
               lesson,
               score: ls.score,
               total: ls.total,
               scorePct,
+              attemptNumber: attemptNum,
               date: new Date().toLocaleDateString('en-GB', { year: 'numeric', month: 'long', day: 'numeric' }),
             });
           }
-          state.masteryContext = { lesson, scorePct, mastered: true };
+          state.masteryContext = { lesson, scorePct, attemptNumber: attemptNum, mastered: true };
           masteryTriggered = true;
         } else {
-          state.masteryContext = { lesson, scorePct, mastered: false, target: Math.round(CONFIG.MASTERY_THRESHOLD * 100) };
+          state.masteryContext = { lesson, scorePct, attemptNumber: attemptNum, mastered: false, target: Math.round(CONFIG.MASTERY_THRESHOLD * 100) };
           masteryTriggered = true;
         }
       }
@@ -881,7 +1250,10 @@
         <h2 class="section-title">Results · Q${tileNum}</h2>
       </header>
       <div class="results-card">
-        <div class="results-score">${formatScore(score)} / ${total}</div>
+        <div class="results-score">
+          ${formatScore(score)} / ${total}
+          <div style="margin-top:6px;"><small class="attempt-badge">Attempt #${progress.attemptNumber || 1}</small></div>
+        </div>
         <div class="results-pct">${pct}%</div>
         <div class="results-msg">${msg}</div>
         <div class="results-actions">
@@ -1054,7 +1426,7 @@
         <div class="cert-item">
           <div class="cert-item-info">
             <h4>🏅 Lesson ${c.lesson} Mastered</h4>
-            <p>Score: ${c.scorePct}% · ${c.date}</p>
+            <p>Score: ${c.scorePct}% · <small class="attempt-badge">Attempt #${c.attemptNumber || 1}</small> · ${c.date}</p>
           </div>
           <div class="cert-item-actions">
             <button class="btn btn-secondary btn-sm cert-view-btn" data-lesson="${c.lesson}" data-score="${c.scorePct}">View</button>
@@ -1141,6 +1513,237 @@
     setTimeout(() => container.remove(), 1000);
   }
 
+  // ── TEACHER DASHBOARD (Passcode: 5113) ──────────────
+  function renderTeacherDashboard() {
+    const data = Tracker.getData();
+    const students = Object.values(data.students || {});
+    
+    const totalStudents = students.length;
+    let totalAttempts = 0;
+    let totalCertificates = 0;
+    const todayStr = new Date().toISOString().slice(0, 10);
+    let activeToday = 0;
+
+    students.forEach(s => {
+      totalAttempts += (s.history ? s.history.length : 0);
+      totalCertificates += (s.certificates ? s.certificates.length : 0);
+      if (s.lastSeen && s.lastSeen.startsWith(todayStr)) activeToday++;
+    });
+
+    let studentsHTML = '';
+    if (students.length === 0) {
+      studentsHTML = `
+      <div class="teacher-empty-card">
+        <span class="empty-icon">👥</span>
+        <h3>No student activity recorded yet</h3>
+        <p>When students access the website and complete practice sets, their access timestamps, questions, scores, and certificates will appear here grouped under each student's name.</p>
+      </div>`;
+    } else {
+      studentsHTML = students.map((s, idx) => {
+        const historyCount = s.history ? s.history.length : 0;
+        const certCount = s.certificates ? s.certificates.length : 0;
+
+        const attemptsHTML = (s.history && s.history.length > 0) ? `
+          <div class="teacher-attempts-grid">
+            ${s.history.map(h => {
+              const info = getTileInfo(h.tile);
+              return `
+              <div class="teacher-attempt-chip">
+                <span class="chip-q">Q${h.tile} (${h.type.toUpperCase()})</span>
+                <span class="chip-score">${h.score}/${h.total} (${h.pct}%)</span>
+                <small class="attempt-badge">Attempt #${h.attemptNumber}</small>
+                <span class="chip-time">${h.date}</span>
+              </div>`;
+            }).join('')}
+          </div>
+        ` : '<p class="teacher-subtext">No question sets completed yet.</p>';
+
+        const certsHTML = (s.certificates && s.certificates.length > 0) ? `
+          <div class="teacher-certs-row">
+            ${s.certificates.map(c => `
+              <div class="teacher-cert-badge">
+                <span class="cert-star">★</span>
+                <span><strong>Lesson ${c.lesson}</strong> (${c.scorePct}%)</span>
+                <small class="attempt-badge">Attempt #${c.attemptNumber || 1}</small>
+                <span class="cert-date">${c.date}</span>
+                <button class="btn btn-secondary btn-sm teacher-view-cert" data-student="${escapeAttr(s.name)}" data-lesson="${c.lesson}" data-score="${c.scorePct}">View</button>
+              </div>
+            `).join('')}
+          </div>
+        ` : '<p class="teacher-subtext">No certificates earned yet.</p>';
+
+        const activityRows = (s.activities || []).map(a => `
+          <div class="activity-timeline-item">
+            <span class="activity-time">${a.time}</span>
+            <span class="activity-text">${escapeHTML(a.text)}</span>
+          </div>
+        `).join('');
+
+        return `
+        <div class="teacher-student-card" data-name="${escapeAttr(s.name.toLowerCase())}">
+          <div class="teacher-student-header">
+            <div class="student-profile-title">
+              <span class="student-idx">#${idx + 1}</span>
+              <span class="student-icon">👤</span>
+              <div>
+                <h3 class="teacher-student-name">${escapeHTML(s.name)}</h3>
+                <div class="teacher-meta-row">
+                  <span>🕒 First: <strong>${s.firstSeenDisplay || 'N/A'}</strong></span>
+                  <span>• Last active: <strong>${s.lastSeenDisplay || 'N/A'}</strong></span>
+                  <span>• <strong>${s.visits || 1}</strong> session(s)</span>
+                </div>
+              </div>
+            </div>
+            <div class="teacher-summary-badges">
+              <span class="summary-badge sets-badge">📝 ${historyCount} sets</span>
+              <span class="summary-badge certs-badge">🏅 ${certCount} certs</span>
+            </div>
+          </div>
+
+          <div class="teacher-student-content">
+            <div class="teacher-block">
+              <h4 class="teacher-block-heading">Question Sets Attempted:</h4>
+              ${attemptsHTML}
+            </div>
+
+            <div class="teacher-block">
+              <h4 class="teacher-block-heading">Certificates Earned:</h4>
+              ${certsHTML}
+            </div>
+
+            <details class="teacher-activity-details">
+              <summary class="teacher-details-summary">View Full Activity Log (${(s.activities || []).length} events)</summary>
+              <div class="activity-timeline-box">${activityRows}</div>
+            </details>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    return `
+    <div class="teacher-screen">
+      <header class="section-header teacher-navbar">
+        <button class="back-btn" id="teacher-exit-btn" aria-label="Exit dashboard">← Exit to Practice</button>
+        <div class="teacher-header-center">
+          <h2 class="section-title">👨‍🏫 Teacher Portal · Mr. Mohamad Turkmani</h2>
+          <p class="section-subtitle">Zayed Educational Complex – Suhaila · Student Activity & Mastery Tracker</p>
+        </div>
+        <div class="teacher-top-actions">
+          <button class="btn btn-secondary btn-sm" id="teacher-csv-btn">📥 Export CSV</button>
+          <button class="btn btn-secondary btn-sm" id="teacher-print-btn">🖨️ Print Report</button>
+          <button class="btn btn-danger btn-sm" id="teacher-reset-btn">🗑️ Reset Data</button>
+        </div>
+      </header>
+
+      <div class="teacher-stats-bar">
+        <div class="teacher-stat-card">
+          <div class="stat-icon">👥</div>
+          <div class="stat-data">
+            <span class="stat-large-num">${totalStudents}</span>
+            <span class="stat-caption">Students Accessed</span>
+          </div>
+        </div>
+        <div class="teacher-stat-card">
+          <div class="stat-icon">📝</div>
+          <div class="stat-data">
+            <span class="stat-large-num">${totalAttempts}</span>
+            <span class="stat-caption">Practice Sets Finished</span>
+          </div>
+        </div>
+        <div class="teacher-stat-card">
+          <div class="stat-icon">🏅</div>
+          <div class="stat-data">
+            <span class="stat-large-num">${totalCertificates}</span>
+            <span class="stat-caption">Certificates Awarded</span>
+          </div>
+        </div>
+        <div class="teacher-stat-card">
+          <div class="stat-icon">⏱️</div>
+          <div class="stat-data">
+            <span class="stat-large-num">${activeToday}</span>
+            <span class="stat-caption">Active Today</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="teacher-search-section">
+        <input type="text" id="teacher-search-box" placeholder="🔍 Search student name..." class="teacher-search-field">
+      </div>
+
+      <div class="teacher-students-container" id="teacher-cards-wrap">
+        ${studentsHTML}
+      </div>
+    </div>`;
+  }
+
+  function bindTeacherDashboard() {
+    document.getElementById('teacher-exit-btn')?.addEventListener('click', () => {
+      state.currentScreen = state.studentName ? 'landing' : 'entry';
+      render();
+    });
+
+    // Search filter
+    const searchBox = document.getElementById('teacher-search-box');
+    if (searchBox) {
+      searchBox.addEventListener('input', () => {
+        const query = searchBox.value.trim().toLowerCase();
+        document.querySelectorAll('.teacher-student-card').forEach(card => {
+          const name = card.dataset.name || '';
+          card.style.display = name.includes(query) ? '' : 'none';
+        });
+      });
+    }
+
+    // Export CSV
+    document.getElementById('teacher-csv-btn')?.addEventListener('click', () => {
+      const data = Tracker.getData();
+      const students = Object.values(data.students || {});
+      if (students.length === 0) {
+        alert('No student records to export.');
+        return;
+      }
+      let csv = 'Student Name,First Accessed,Last Active,Visits,Completed Sets,Certificates Count,Attempts Details\n';
+      students.forEach(s => {
+        const setsCount = s.history ? s.history.length : 0;
+        const certsCount = s.certificates ? s.certificates.length : 0;
+        const details = (s.history || []).map(h => `Q${h.tile}:${h.score}/${h.total}(Att#${h.attemptNumber})`).join('; ');
+        csv += `"${(s.name || '').replace(/"/g, '""')}","${s.firstSeenDisplay || ''}","${s.lastSeenDisplay || ''}",${s.visits || 1},${setsCount},${certsCount},"${details}"\n`;
+      });
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `EOT_Grade9_Math_Tracker_${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
+
+    // Print
+    document.getElementById('teacher-print-btn')?.addEventListener('click', () => window.print());
+
+    // Reset Data
+    document.getElementById('teacher-reset-btn')?.addEventListener('click', () => {
+      const conf = prompt('⚠️ Type RESET to clear all student activity records:');
+      if (conf === 'RESET') {
+        Tracker.clearAll();
+        render();
+      }
+    });
+
+    // View Certificate from teacher dashboard
+    document.querySelectorAll('.teacher-view-cert').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const studentName = btn.dataset.student;
+        const lesson = btn.dataset.lesson;
+        const scorePct = parseInt(btn.dataset.score);
+        state.studentName = studentName;
+        state.masteryContext = { lesson, scorePct, mastered: true };
+        state.currentScreen = 'certificate-view';
+        render();
+      });
+    });
+  }
+
   // ── Utility ────────────────────────────────────────
   function formatScore(n) {
     if (n == null) return '0';
@@ -1149,9 +1752,12 @@
 
   function escapeHTML(s) {
     if (!s) return '';
-    const d = document.createElement('div');
-    d.textContent = s;
-    return d.innerHTML;
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   function escapeAttr(s) {
