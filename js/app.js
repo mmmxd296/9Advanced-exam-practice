@@ -262,7 +262,7 @@
     }).filter(Boolean);
   }
 
-  // ── ENTRY SCREEN (Mandatory Name / Secret 5113) ────
+  // ── ENTRY SCREEN (Mandatory Name / Secret Code) ────
   function renderEntry() {
     return `
     <div class="entry-screen">
@@ -291,9 +291,6 @@
         </div>
         <div class="entry-footer">
           <span class="teacher-credit">Instructor: <strong>${CONFIG.TEACHER_NAME}</strong></span>
-          <button class="teacher-quick-btn" id="teacher-code-prompt" title="Instructor Access (5113)">
-            🔒 Teacher Portal
-          </button>
         </div>
       </div>
     </div>`;
@@ -302,8 +299,6 @@
   function bindEntry() {
     const input = document.getElementById('entry-name-input');
     const btn = document.getElementById('entry-start-btn');
-    const hint = document.getElementById('entry-hint');
-    const teacherPrompt = document.getElementById('teacher-code-prompt');
     if (!input || !btn) return;
 
     if (typeof input.focus === 'function') {
@@ -312,22 +307,7 @@
 
     input.addEventListener('input', () => {
       const val = input.value.trim();
-      if (val === TEACHER_CODE) {
-        btn.disabled = false;
-        btn.classList.add('teacher-btn');
-        btn.innerHTML = '🔑 Open Teacher Dashboard →';
-        if (hint) hint.innerHTML = '<span class="teacher-code-alert">Teacher passcode 5113 recognized! Click above to open tracker.</span>';
-      } else if (val.length >= 2) {
-        btn.disabled = false;
-        btn.classList.remove('teacher-btn');
-        btn.innerHTML = 'Start Practice →';
-        if (hint) hint.innerHTML = 'All attempts and certificates will be saved under your name.';
-      } else {
-        btn.disabled = true;
-        btn.classList.remove('teacher-btn');
-        btn.innerHTML = 'Start Practice →';
-        if (hint) hint.innerHTML = 'All attempts and certificates will be saved under your name.';
-      }
+      btn.disabled = val.length < 2;
     });
 
     const submitEntry = () => {
@@ -346,18 +326,6 @@
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !btn.disabled) submitEntry();
     });
-
-    if (teacherPrompt) {
-      teacherPrompt.addEventListener('click', () => {
-        const code = prompt('Enter Teacher Passcode (5113):');
-        if (code && code.trim() === TEACHER_CODE) {
-          state.currentScreen = 'teacher-dashboard';
-          render();
-        } else if (code) {
-          alert('Incorrect passcode.');
-        }
-      });
-    }
   }
 
   function loginStudent(name) {

@@ -1300,14 +1300,6 @@ a { color: var(--navy); text-decoration: none; }
   margin-bottom: 18px;
   line-height: 1.4;
 }
-.teacher-code-alert {
-  color: #1b5e20;
-  font-weight: 600;
-  background: #e8f5e9;
-  padding: 4px 8px;
-  border-radius: 4px;
-  display: inline-block;
-}
 .entry-start-btn {
   width: 100%;
   padding: 14px;
@@ -1317,39 +1309,12 @@ a { color: var(--navy); text-decoration: none; }
   cursor: pointer;
   transition: all var(--transition);
 }
-.entry-start-btn.teacher-btn {
-  background: #d4a017 !important;
-  color: var(--navy) !important;
-  border: 2px solid #b8860b !important;
-  box-shadow: 0 4px 14px rgba(212, 160, 23, 0.35) !important;
-  animation: pulse 1.2s infinite alternate;
-}
-@keyframes pulse {
-  0% { transform: scale(1); }
-  100% { transform: scale(1.02); }
-}
 .entry-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  text-align: center;
   padding-top: 18px;
   border-top: 1px solid var(--gray-100);
-  font-size: 0.82rem;
-  color: var(--gray-400);
-}
-.teacher-quick-btn {
-  background: none;
-  border: none;
-  color: var(--gray-400);
-  font-size: 0.8rem;
-  cursor: pointer;
-  padding: 4px 8px;
-  border-radius: 4px;
-  transition: all var(--transition);
-}
-.teacher-quick-btn:hover {
-  color: var(--navy);
-  background: var(--gray-100);
+  font-size: 0.85rem;
+  color: var(--gray-500);
 }
 
 /* ── TEACHER DASHBOARD (Passcode: 5113) ────────────── */
