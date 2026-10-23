@@ -36,6 +36,38 @@
     </div>
   </div>
 
+  <!-- Teacher Auth Modal -->
+  <div id="teacher-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="teacher-modal-title">
+    <div class="modal-card teacher-auth-card">
+      <div class="modal-header-row">
+        <h3 id="teacher-modal-title">🔒 Teacher Portal</h3>
+        <button class="close-btn" id="close-teacher-modal" type="button" aria-label="Close modal">&times;</button>
+      </div>
+      <p class="modal-subtitle">Instructor access · Mr. Mohamad Turkmani</p>
+      
+      <form id="teacher-auth-form" class="teacher-auth-form" onsubmit="return false;">
+        <label for="teacher-passcode-input" class="teacher-auth-label">Enter Passcode:</label>
+        <div class="teacher-passcode-wrap">
+          <input 
+            type="password" 
+            id="teacher-passcode-input" 
+            class="teacher-passcode-field" 
+            placeholder="••••" 
+            autocomplete="current-password" 
+            inputmode="numeric" 
+            maxlength="20">
+          <button type="button" id="toggle-teacher-passcode" class="passcode-peek-btn" title="Toggle visibility" aria-label="Toggle password visibility">👁️</button>
+        </div>
+        <p id="teacher-auth-error" class="teacher-auth-error hidden">⚠️ Incorrect passcode. Please try again.</p>
+        
+        <div class="teacher-auth-actions">
+          <button type="button" id="cancel-teacher-modal" class="btn btn-secondary">Cancel</button>
+          <button type="submit" id="submit-teacher-passcode" class="btn btn-primary">Enter Dashboard →</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <!-- Calculator Modal -->
   <div id="calc-modal" class="modal-overlay hidden">
     <div class="modal-card calc-card">

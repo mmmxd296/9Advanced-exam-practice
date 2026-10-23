@@ -291,6 +291,7 @@
         </div>
         <div class="entry-footer">
           <span class="teacher-credit">Instructor: <strong>${CONFIG.TEACHER_NAME}</strong></span>
+          <button type="button" class="teacher-portal-link" id="entry-teacher-btn">🔒 Teacher Portal</button>
         </div>
       </div>
     </div>`;
@@ -313,6 +314,7 @@
     const submitEntry = () => {
       const val = input.value.trim();
       if (val === TEACHER_CODE) {
+        input.value = '';
         state.currentScreen = 'teacher-dashboard';
         render();
       } else if (val.length >= 2) {
@@ -325,6 +327,10 @@
     btn.addEventListener('click', submitEntry);
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !btn.disabled) submitEntry();
+    });
+
+    document.getElementById('entry-teacher-btn')?.addEventListener('click', () => {
+      openTeacherModal();
     });
   }
 
@@ -393,7 +399,10 @@
             </div>
           </button>
         </div>
-        <p class="teacher-name">${CONFIG.TEACHER_NAME}</p>
+        <div class="footer-teacher-col">
+          <p class="teacher-name">${CONFIG.TEACHER_NAME}</p>
+          <button type="button" class="landing-teacher-portal-btn" id="landing-teacher-btn" title="Open Teacher Portal">🔒 Teacher Portal</button>
+        </div>
         <div class="banner-wrap">
           <img src="assets/banner.jpg" alt="School Banner" class="banner-img">
         </div>
@@ -405,6 +414,7 @@
     document.getElementById('card-mcq')?.addEventListener('click', () => openSection('mcq'));
     document.getElementById('card-frq')?.addEventListener('click', () => openSection('frq'));
     document.getElementById('open-student-profile')?.addEventListener('click', () => showStudentProfileModal());
+    document.getElementById('landing-teacher-btn')?.addEventListener('click', () => openTeacherModal());
   }
 
   function openSection(section) {
@@ -533,6 +543,81 @@
         render();
       });
     });
+  }
+
+  // ── TEACHER PASSCODE MODAL (Discreet & Masked) ──────
+  function openTeacherModal() {
+    const modal = document.getElementById('teacher-modal');
+    const input = document.getElementById('teacher-passcode-input');
+    const errorMsg = document.getElementById('teacher-auth-error');
+    const closeBtn = document.getElementById('close-teacher-modal');
+    const cancelBtn = document.getElementById('cancel-teacher-modal');
+    const form = document.getElementById('teacher-auth-form');
+    const toggleBtn = document.getElementById('toggle-teacher-passcode');
+
+    if (!modal || !input) return;
+
+    // Reset input state
+    input.value = '';
+    input.type = 'password';
+    if (toggleBtn) toggleBtn.textContent = '👁️';
+    if (errorMsg) errorMsg.classList.add('hidden');
+
+    modal.classList.remove('hidden');
+    setTimeout(() => {
+      try { input.focus(); } catch (e) {}
+    }, 60);
+
+    const closeModal = () => {
+      modal.classList.add('hidden');
+      input.value = '';
+      if (errorMsg) errorMsg.classList.add('hidden');
+    };
+
+    if (closeBtn) closeBtn.onclick = closeModal;
+    if (cancelBtn) cancelBtn.onclick = closeModal;
+
+    modal.onclick = (e) => {
+      if (e.target === modal) closeModal();
+    };
+
+    if (toggleBtn) {
+      toggleBtn.onclick = () => {
+        if (input.type === 'password') {
+          input.type = 'text';
+          toggleBtn.textContent = '🙈';
+        } else {
+          input.type = 'password';
+          toggleBtn.textContent = '👁️';
+        }
+      };
+    }
+
+    const verifyPasscode = () => {
+      const val = input.value.trim();
+      if (val === TEACHER_CODE) {
+        closeModal();
+        state.currentScreen = 'teacher-dashboard';
+        render();
+      } else {
+        if (errorMsg) {
+          errorMsg.classList.remove('hidden');
+          errorMsg.style.animation = 'none';
+          void errorMsg.offsetWidth;
+          errorMsg.style.animation = 'shake 0.3s ease';
+        }
+        input.value = '';
+        input.focus();
+      }
+    };
+
+    if (form) {
+      form.onsubmit = (e) => {
+        e.preventDefault();
+        verifyPasscode();
+        return false;
+      };
+    }
   }
 
   // ── QUESTION LIST ──────────────────────────────────
@@ -1481,7 +1566,7 @@
     setTimeout(() => container.remove(), 1000);
   }
 
-  // ── TEACHER DASHBOARD (Passcode: 5113) ──────────────
+  // ── TEACHER DASHBOARD ────────────────────────────────
   function renderTeacherDashboard() {
     const data = Tracker.getData();
     const students = Object.values(data.students || {});
