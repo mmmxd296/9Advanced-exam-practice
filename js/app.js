@@ -2,9 +2,70 @@
 (() => {
   'use strict';
 
-  // ── Teacher & Student Activity Tracker (localStorage) ──
+  // ── Teacher & Student Activity Tracker (localStorage + Firebase Cloud Sync) ──
   const TRACKER_KEY = 'eot_teacher_tracker_v1';
   const TEACHER_CODE = '5113';
+
+  // ── Firebase Real-time Cloud Sync Engine ──────────────
+  let fbDb = null;
+  let isCloudActive = false;
+
+  function initFirebaseSync() {
+    const cfg = (typeof FIREBASE_CONFIG !== 'undefined' && FIREBASE_CONFIG && FIREBASE_CONFIG.apiKey ? FIREBASE_CONFIG : null) || 
+                (typeof firebaseConfig !== 'undefined' && firebaseConfig && firebaseConfig.apiKey ? firebaseConfig : null);
+
+    if (typeof firebase !== 'undefined' && cfg && cfg.apiKey) {
+      try {
+        if (!cfg.databaseURL && cfg.projectId) {
+          cfg.databaseURL = `https://${cfg.projectId}-default-rtdb.firebaseio.com`;
+        }
+        if (!firebase.apps || !firebase.apps.length) {
+          firebase.initializeApp(cfg);
+        }
+        fbDb = firebase.database();
+        isCloudActive = true;
+
+        // Real-time listener: pull all students from the cloud database
+        fbDb.ref('eot_students').on('value', (snapshot) => {
+          const cloudData = snapshot.val();
+          if (cloudData) {
+            const localData = Tracker.getData();
+            Object.keys(cloudData).forEach(k => {
+              const s = cloudData[k];
+              if (s && s.name) {
+                localData.students[s.name] = s;
+              }
+            });
+            Tracker.saveData(localData, false);
+            if (state.currentScreen === 'teacher-dashboard') {
+              render();
+            }
+          }
+        }, (err) => {
+          console.warn('Firebase cloud sync notice:', err);
+        });
+
+        // Push any existing local students to cloud so they sync to other devices immediately
+        const existingData = Tracker.getData();
+        if (existingData && existingData.students) {
+          Object.values(existingData.students).forEach(s => pushStudentToCloud(s));
+        }
+      } catch (err) {
+        console.warn('Firebase init notice:', err);
+      }
+    }
+  }
+
+  function pushStudentToCloud(student) {
+    if (!isCloudActive || !fbDb || !student || !student.name) return;
+    try {
+      // Firebase keys cannot contain '.', '#', '$', '/', '[', or ']'
+      const safeKey = encodeURIComponent(student.name.trim()).replace(/\./g, '%2E');
+      fbDb.ref('eot_students/' + safeKey).set(student);
+    } catch (e) {
+      console.warn('Cloud sync error:', e);
+    }
+  }
 
   const Tracker = {
     getData() {
@@ -13,7 +74,7 @@
         return d ? JSON.parse(d) : { students: {} };
       } catch { return { students: {} }; }
     },
-    saveData(data) {
+    saveData(data, syncToCloud = false) {
       try {
         localStorage.setItem(TRACKER_KEY, JSON.stringify(data));
       } catch (e) { console.error('Tracker save error', e); }
@@ -54,6 +115,7 @@
         s.activities.unshift({ type: 'login', text: `Session access (visit #${s.visits})`, time: displayTime });
       }
       this.saveData(data);
+      pushStudentToCloud(data.students[clean]);
       return data.students[clean];
     },
     recordAttempt(name, tileNum, score, total, type) {
@@ -89,6 +151,7 @@
       });
 
       this.saveData(data);
+      pushStudentToCloud(s);
       return attemptNum;
     },
     recordCertificate(name, lesson, scorePct, attemptNum) {
@@ -120,9 +183,17 @@
       });
 
       this.saveData(data);
+      pushStudentToCloud(s);
     },
     clearAll() {
       this.saveData({ students: {} });
+      if (isCloudActive && fbDb) {
+        try {
+          fbDb.ref('eot_students').remove();
+        } catch (e) {
+          console.warn('Cloud remove error:', e);
+        }
+      }
     }
   };
 
@@ -1678,7 +1749,12 @@
       <header class="section-header teacher-navbar">
         <button class="back-btn" id="teacher-exit-btn" aria-label="Exit dashboard">← Exit to Practice</button>
         <div class="teacher-header-center">
-          <h2 class="section-title">👨‍🏫 Teacher Portal · Mr. Mohamad Turkmani</h2>
+          <div class="teacher-title-row">
+            <h2 class="section-title">👨‍🏫 Teacher Portal · Mr. Mohamad Turkmani</h2>
+            <span class="cloud-status-badge ${isCloudActive ? 'cloud-online' : 'cloud-offline'}" title="${isCloudActive ? 'Live Real-time Cloud Sync is active across all devices' : 'Using Local Browser Storage. Paste Firebase keys in js/config.js to sync across PC and phone'}">
+              ${isCloudActive ? '🟢 Live Cloud Sync' : '📱 Local Storage Mode'}
+            </span>
+          </div>
           <p class="section-subtitle">Zayed Educational Complex – Suhaila · Student Activity & Mastery Tracker</p>
         </div>
         <div class="teacher-top-actions">
@@ -1819,6 +1895,7 @@
 
   // ── Init ───────────────────────────────────────────
   function init() {
+    initFirebaseSync();
     render();
     Calculator.init();
     

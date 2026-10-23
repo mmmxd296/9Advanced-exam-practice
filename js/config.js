@@ -8,6 +8,19 @@ const CONFIG = {
   FRQ_SET_SIZE: 5,
 };
 
+// ── Firebase Cloud Sync Configuration ────────────────────────
+// Live real-time syncing across PC, phones, tablets, and students:
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyA4gqMnSC5fztjXD8hjuJ4C9VcPy6VNim8",
+  authDomain: "mmmxd296-github.firebaseapp.com",
+  databaseURL: "https://mmmxd296-github-default-rtdb.firebaseio.com",
+  projectId: "mmmxd296-github",
+  storageBucket: "mmmxd296-github.firebasestorage.app",
+  messagingSenderId: "990484112573",
+  appId: "1:990484112573:web:983e30cd346d21a6c683d4"
+};
+const firebaseConfig = FIREBASE_CONFIG;
+
 // ── Tile Blueprint (Ordered chronologically from first lesson to last lesson) ──
 const TILE_BLUEPRINT = [
   // MCQ tiles Q1–Q20 (Ordered: L 2-1 -> L 2-3 -> L 2-4 -> L 2-5 -> L 2-6 -> L 4-2 -> L 4-3 -> L 4-4 -> L 4-6 -> L 4-7 -> L 5-1 -> L 5-2 -> L 5-6 -> L 6-1 -> L 6-2 -> L 6-4)
